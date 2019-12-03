@@ -71,8 +71,8 @@ cdef class _AioCall:
         """Destroys the corresponding Core object for this RPC."""
         grpc_call_unref(self._grpc_call_wrapper.call)
 
-    async def unary_unary(self, bytes method, bytes request, object timeout, object metadata,
-                          object deadline, AioCancelStatus cancel_status):
+    async def unary_unary(self, bytes method, bytes request, object deadline, object metadata,
+                          AioCancelStatus cancel_status):
         cdef object loop = asyncio.get_event_loop()
 
         cdef tuple operations
