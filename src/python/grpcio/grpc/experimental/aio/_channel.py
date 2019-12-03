@@ -13,27 +13,46 @@
 # limitations under the License.
 """Invocation-side implementation of gRPC Asyncio Python."""
 import asyncio
-from typing import Callable, Optional
+import functools
+from typing import Callable, Optional, List, Sequence, Iterator, Dict, TypeVar
 
 from grpc import _common
 from grpc._cython import cygrpc
+from grpc._interceptor import _ClientCallDetails
 
 from ._call import Call
+from ._call import AioRpcError
+from ._interceptor import ClientCallDetails
+from ._interceptor import UnaryUnaryClientInterceptor
 
 SerializingFunction = Callable[[str], bytes]
 DeserializingFunction = Callable[[bytes], str]
+Request = TypeVar('Request')
 
 
 class UnaryUnaryMultiCallable:
     """Afford invoking a unary-unary RPC from client-side in an asynchronous way."""
 
-    def __init__(self, channel: cygrpc.AioChannel, method: bytes,
-                 request_serializer: SerializingFunction,
-                 response_deserializer: DeserializingFunction) -> None:
+    _channel: cygrpc.AioChannel
+    _method: bytes
+    _request_serializer: SerializingFunction
+    _response_deserializer: DeserializingFunction
+    _interceptors: Optional[Sequence[UnaryUnaryClientInterceptor]]
+    _loop: asyncio.AbstractEventLoop
+
+    def __init__(
+            self,
+            channel: cygrpc.AioChannel,
+            method: bytes,
+            request_serializer: SerializingFunction,
+            response_deserializer: DeserializingFunction,
+            interceptors: Optional[List[UnaryUnaryClientInterceptor]] = None
+    ) -> None:
         self._channel = channel
         self._method = method
         self._request_serializer = request_serializer
         self._response_deserializer = response_deserializer
+        self._interceptors = interceptors
         self._loop = asyncio.get_event_loop()
 
     def _timeout_to_deadline(self, timeout: int) -> Optional[int]:
@@ -42,13 +61,13 @@ class UnaryUnaryMultiCallable:
         return self._loop.time() + timeout
 
     def __call__(self,
-                 request,
+                 request: Request,
                  *,
-                 timeout=None,
-                 metadata=None,
+                 timeout: Optional[float] = None,
+                 metadata: Optional[Dict] = None,
                  credentials=None,
-                 wait_for_ready=None,
-                 compression=None) -> Call:
+                 wait_for_ready: Optional[bool] = None,
+                 compression: Optional[bool] = None) -> Call:
         """Asynchronously invokes the underlying RPC.
 
         Args:
@@ -66,11 +85,6 @@ class UnaryUnaryMultiCallable:
 
         Returns:
           A Call object instance which is an awaitable object.
-
-        Raises:
-          RpcError: Indicating that the RPC terminated with non-OK status. The
-            raised RpcError will also be a Call for the RPC affording the RPC's
-            metadata, status code, and details.
         """
 
         if credentials:
@@ -85,13 +99,62 @@ class UnaryUnaryMultiCallable:
 
         serialized_request = _common.serialize(request,
                                                self._request_serializer)
-        timeout = self._timeout_to_deadline(timeout)
         aio_cancel_status = cygrpc.AioCancelStatus()
-        aio_call = asyncio.ensure_future(
-            self._channel.unary_unary(self._method, serialized_request, timeout,
-                                      metadata, aio_cancel_status),
-            loop=self._loop)
+        if self._interceptors:
+            client_call_details = _ClientCallDetails(
+                self._method, timeout, metadata, credentials, wait_for_ready,
+                compression)
+            aio_call = asyncio.ensure_future(
+                self._wrap_call_in_interceptors(
+                    client_call_details, serialized_request, aio_cancel_status),
+                loop=self._loop)
+        else:
+            aio_call = asyncio.ensure_future(
+                self._call(self._method, serialized_request, timeout,
+                           metadata, aio_cancel_status),
+                loop=self._loop)
+
         return Call(aio_call, self._response_deserializer, aio_cancel_status)
+
+    async def _wrap_call_in_interceptors(
+            self, client_call_details: ClientCallDetails, request: bytes,
+            aio_cancel_status: cygrpc.AioCancelStatus):
+        """Run the RPC call wraped in interceptors"""
+
+        async def _run_interceptor(
+                interceptors: Iterator[UnaryUnaryClientInterceptor],
+                client_call_details: ClientCallDetails, request: bytes):
+            try:
+                interceptor = next(interceptors)
+            except StopIteration:
+                interceptor = None
+
+            if interceptor:
+                continuation = functools.partial(_run_interceptor, interceptors)
+                return await interceptor.intercept_unary_unary(
+                    continuation, client_call_details, request)
+            else:
+                return await self._call(client_call_details.method, request,
+                                        client_call_details.timeout,
+                                        aio_cancel_status)
+
+        return await _run_interceptor(
+            iter(self._interceptors), client_call_details, request)
+
+    async def _call(self, method: bytes, request: bytes,
+                    timeout: Optional[float],
+                    aio_cancel_status: cygrpc.AioCancelStatus):
+
+        deadline = self._timeout_to_deadline(timeout)
+
+        try:
+            return await self._channel.unary_unary(method, request, deadline,
+                                                   aio_cancel_status)
+        except cygrpc.AioRpcError as aio_rpc_error:
+            raise AioRpcError(
+                _common.CYGRPC_STATUS_CODE_TO_STATUS_CODE[aio_rpc_error.code()],
+                aio_rpc_error.details(), aio_rpc_error.initial_metadata(),
+                aio_rpc_error.trailing_metadata()) from aio_rpc_error
 
 
 class Channel:
@@ -100,7 +163,12 @@ class Channel:
     A cygrpc.AioChannel-backed implementation.
     """
 
-    def __init__(self, target, options, credentials, compression):
+    def __init__(self,
+                 target,
+                 options,
+                 credentials,
+                 compression,
+                 interceptors=None):
         """Constructor.
 
         Args:
@@ -109,6 +177,8 @@ class Channel:
           credentials: A cygrpc.ChannelCredentials or None.
           compression: An optional value indicating the compression method to be
             used over the lifetime of the channel.
+          interceptors: An optional list of interceptors that would be used for
+            intercepting any RPC executed with that channel.
         """
 
         if options:
@@ -119,6 +189,22 @@ class Channel:
 
         if compression:
             raise NotImplementedError("TODO: compression not implemented yet")
+
+        if interceptors is None:
+            self._unary_unary_interceptors = None
+        else:
+            self._unary_unary_interceptors = list(
+                filter(
+                    lambda interceptor: isinstance(interceptor, UnaryUnaryClientInterceptor),
+                    interceptors)) or None
+
+            invalid_interceptors = set(interceptors) - set(
+                self._unary_unary_interceptors or [])
+            if invalid_interceptors:
+                raise ValueError(
+                    "Interceptor must be "+\
+                    "UnaryUnaryClientInterceptors, the following are invalid: {}"\
+                    .format(invalid_interceptors))
 
         self._channel = cygrpc.AioChannel(_common.encode(target))
 
@@ -139,9 +225,12 @@ class Channel:
         Returns:
           A UnaryUnaryMultiCallable value for the named unary-unary method.
         """
-        return UnaryUnaryMultiCallable(self._channel, _common.encode(method),
-                                       request_serializer,
-                                       response_deserializer)
+        return UnaryUnaryMultiCallable(
+            self._channel,
+            _common.encode(method),
+            request_serializer,
+            response_deserializer,
+            interceptors=self._unary_unary_interceptors)
 
     async def _close(self):
         # TODO: Send cancellation status
