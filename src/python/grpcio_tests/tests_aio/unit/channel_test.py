@@ -13,6 +13,13 @@
 # limitations under the License.
 import logging
 import unittest
+import sys
+
+if sys.version_info[0:2] < (3, 6):
+    from collections import OrderedDict
+    MetadataDict = OrderedDict
+else:
+    MetadataDict = dict
 
 import grpc
 
@@ -25,16 +32,10 @@ from src.proto.grpc.testing import messages_pb2
 _UNARY_CALL_METHOD = '/grpc.testing.TestService/UnaryCall'
 _EMPTY_CALL_METHOD = '/grpc.testing.TestService/EmptyCall'
 
-_INVOCATION_METADATA = (
-    (
-        'initial-md-key',
-        'initial-md-value',
-    ),
-    (
-        'trailing-md-key-bin',
-        b'\x00\x02',
-    ),
-)
+_INVOCATION_METADATA = MetadataDict((
+    ('initial-md-key', 'initial-md-value'),
+    ('trailing-md-key-bin', b'\x00\x02'),
+))
 
 
 class TestChannel(AioTestBase):

@@ -21,8 +21,12 @@ import grpc
 _EMPTY_FLAGS = 0
 _EMPTY_MASK = 0
 
-UnaryUnaryOpsResult = namedtuple('UnaryUnaryOpsResult',
-                                 ['initial_metadata', 'message', 'code', 'details', 'trailing_metadata'])
+
+class UnaryUnaryOpsResult(
+        namedtuple(
+            'UnaryUnaryOpsResult',
+            ('initial_metadata', 'message', 'code', 'details', 'trailing_metadata'))):
+    pass
 
 
 cdef class _AioCall:
@@ -71,7 +75,7 @@ cdef class _AioCall:
         """Destroys the corresponding Core object for this RPC."""
         grpc_call_unref(self._grpc_call_wrapper.call)
 
-    async def unary_unary(self, bytes method, bytes request, object deadline, object metadata,
+    async def unary_unary(self, bytes method, bytes request, object deadline, tuple metadata,
                           AioCancelStatus cancel_status):
         cdef object loop = asyncio.get_event_loop()
 

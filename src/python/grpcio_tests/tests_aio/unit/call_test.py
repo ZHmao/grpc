@@ -14,6 +14,13 @@
 import asyncio
 import logging
 import unittest
+import sys
+
+if sys.version_info[0:2] < (3, 6):
+    from collections import OrderedDict
+    MetadataDict = OrderedDict
+else:
+    MetadataDict = dict
 
 import grpc
 
@@ -144,6 +151,39 @@ class TestCall(AioTestBase):
                 )
                 call = hi(messages_pb2.SimpleRequest())
                 self.assertEqual(await call.details(), '')
+
+        self.loop.run_until_complete(coro())
+
+    def test_call_initial_metadata_awaitable(self):
+
+        async def coro():
+            server_target, _ = await start_test_server()  # pylint: disable=unused-variable
+
+            async with aio.insecure_channel(server_target) as channel:
+                hi = channel.unary_unary(
+                    '/grpc.testing.TestService/UnaryCall',
+                    request_serializer=messages_pb2.SimpleRequest.
+                      SerializeToString,
+                    response_deserializer=messages_pb2.SimpleResponse.FromString
+                )
+                call = hi(messages_pb2.SimpleRequest())
+                self.assertEqual(await call.initial_metadata(), MetadataDict())
+
+        self.loop.run_until_complete(coro())
+
+    def test_call_trailing_metadata_awaitable(self):
+        async def coro():
+            server_target, _ = await start_test_server()  # pylint: disable=unused-variable
+
+            async with aio.insecure_channel(server_target) as channel:
+                hi = channel.unary_unary(
+                    '/grpc.testing.TestService/UnaryCall',
+                    request_serializer=messages_pb2.SimpleRequest.
+                      SerializeToString,
+                    response_deserializer=messages_pb2.SimpleResponse.FromString
+                )
+                call = hi(messages_pb2.SimpleRequest())
+                self.assertEqual(await call.trailing_metadata(), MetadataDict())
 
         self.loop.run_until_complete(coro())
 

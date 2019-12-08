@@ -14,8 +14,15 @@
 """Invocation-side implementation of gRPC Asyncio Python."""
 import asyncio
 import enum
-from typing import Callable, Dict, Optional, ClassVar
-from typing import Sequence, Tuple, Text, AnyStr
+import sys
+from typing import Callable, Optional, ClassVar
+
+if sys.version_info[0:2] < (3, 6):
+    from typing import OrderedDict as MetadataDictType
+    from collections import OrderedDict as MetadataDict
+else:
+    from typing import Dict as MetadataDictType
+    MetadataDict = dict
 
 import grpc
 from grpc import _common
@@ -34,14 +41,14 @@ class AioRpcError(grpc.RpcError):
 
     _code: grpc.StatusCode
     _details: Optional[str]
-    _initial_metadata: Optional[Dict]
-    _trailing_metadata: Optional[Dict]
+    _initial_metadata: Optional[MetadataDict]
+    _trailing_metadata: Optional[MetadataDict]
 
     def __init__(self,
                  code: grpc.StatusCode,
                  details: Optional[str] = None,
-                 initial_metadata: Optional[Dict] = None,
-                 trailing_metadata: Optional[Dict] = None):
+                 initial_metadata: Optional[MetadataDict] = None,
+                 trailing_metadata: Optional[MetadataDict] = None):
         """Constructor.
 
         Args:
@@ -72,14 +79,14 @@ class AioRpcError(grpc.RpcError):
         """
         return self._details
 
-    def initial_metadata(self) -> Optional[Dict]:
+    def initial_metadata(self) -> Optional[MetadataDict]:
         """
         Returns:
           The inital metadata received.
         """
         return self._initial_metadata
 
-    def trailing_metadata(self) -> Optional[Dict]:
+    def trailing_metadata(self) -> Optional[MetadataDict]:
         """
         Returns:
           The trailing metadata received.
@@ -108,8 +115,8 @@ class Call:
     _response: Optional[bytes]
     _code: grpc.StatusCode
     _details: Optional[str]
-    _initial_metadata: Optional[Dict]
-    _trailing_metadata: Optional[Dict]
+    _initial_metadata: Optional[MetadataDict]
+    _trailing_metadata: Optional[MetadataDict]
     _call: asyncio.Task
     _call_cancel_status: cygrpc.AioCancelStatus
     _response_deserializer: DeserializingFunction
@@ -183,7 +190,7 @@ class Call:
         """
         return self._state is not _RpcState.ONGOING
 
-    async def initial_metadata(self) -> Sequence[Tuple[Text, AnyStr]]:
+    async def initial_metadata(self) -> MetadataDict:
         if not self.done():
             try:
                 await self
@@ -192,7 +199,7 @@ class Call:
 
         return self._initial_metadata
 
-    async def trailing_metadata(self) -> Sequence[Tuple[Text, AnyStr]]:
+    async def trailing_metadata(self) -> MetadataDict:
         if not self.done():
             try:
                 await self
@@ -268,6 +275,8 @@ class Call:
         self._code = _common.CYGRPC_STATUS_CODE_TO_STATUS_CODE[ops_result.code]
         self._details = ops_result.details
         self._state = _RpcState.FINISHED
-        self._initial_metadata = ops_result.initial_metadata
-        self._trailing_metadata = ops_result.trailing_metadata
+        if isinstance(ops_result.initial_metadata, tuple):
+            self._initial_metadata = MetadataDict(ops_result.initial_metadata)
+        if isinstance(ops_result.trailing_metadata, tuple):
+            self._trailing_metadata = MetadataDict(ops_result.trailing_metadata)
         return self._response

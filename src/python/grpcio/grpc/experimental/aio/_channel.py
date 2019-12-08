@@ -14,7 +14,13 @@
 """Invocation-side implementation of gRPC Asyncio Python."""
 import asyncio
 import functools
-from typing import Callable, Optional, List, Sequence, Iterator, Dict, TypeVar
+import sys
+from typing import Callable, Optional, List, Sequence, Iterator, TypeVar
+
+if sys.version_info[0:2] < (3, 6):
+    from typing import OrderedDict as MetadataDict
+else:
+    from typing import Dict as MetadataDict
 
 from grpc import _common
 from grpc._cython import cygrpc
@@ -64,7 +70,7 @@ class UnaryUnaryMultiCallable:
                  request: Request,
                  *,
                  timeout: Optional[float] = None,
-                 metadata: Optional[Dict] = None,
+                 metadata: Optional[MetadataDict] = None,
                  credentials=None,
                  wait_for_ready: Optional[bool] = None,
                  compression: Optional[bool] = None) -> Call:
@@ -97,6 +103,9 @@ class UnaryUnaryMultiCallable:
         if compression:
             raise NotImplementedError("TODO: compression not implemented yet")
 
+        if metadata:
+            metadata = tuple(metadata.items())
+
         serialized_request = _common.serialize(request,
                                                self._request_serializer)
         aio_cancel_status = cygrpc.AioCancelStatus()
@@ -119,7 +128,7 @@ class UnaryUnaryMultiCallable:
     async def _wrap_call_in_interceptors(
             self, client_call_details: ClientCallDetails, request: bytes,
             aio_cancel_status: cygrpc.AioCancelStatus):
-        """Run the RPC call wraped in interceptors"""
+        """Run the RPC call wrapped in interceptors"""
 
         async def _run_interceptor(
                 interceptors: Iterator[UnaryUnaryClientInterceptor],
@@ -136,20 +145,21 @@ class UnaryUnaryMultiCallable:
             else:
                 return await self._call(client_call_details.method, request,
                                         client_call_details.timeout,
+                                        client_call_details.metadata,
                                         aio_cancel_status)
 
         return await _run_interceptor(
             iter(self._interceptors), client_call_details, request)
 
     async def _call(self, method: bytes, request: bytes,
-                    timeout: Optional[float],
+                    timeout: Optional[float], metadata: MetadataDict,
                     aio_cancel_status: cygrpc.AioCancelStatus):
 
         deadline = self._timeout_to_deadline(timeout)
 
         try:
             return await self._channel.unary_unary(method, request, deadline,
-                                                   aio_cancel_status)
+                                                   metadata, aio_cancel_status)
         except cygrpc.AioRpcError as aio_rpc_error:
             raise AioRpcError(
                 _common.CYGRPC_STATUS_CODE_TO_STATUS_CODE[aio_rpc_error.code()],
