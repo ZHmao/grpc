@@ -106,6 +106,37 @@ class TestLite(setuptools.Command):
         self.distribution.fetch_build_eggs(self.distribution.tests_require)
 
 
+class TestPy3Only(setuptools.Command):
+    """Command to run tests for Python 3+ features.
+
+    This does not include asyncio tests, which are housed in a separate
+    directory.
+    """
+
+    description = 'run tests for py3+ features'
+    user_options = []
+
+    def initialize_options(self):
+        pass
+
+    def finalize_options(self):
+        pass
+
+    def run(self):
+        self._add_eggs_to_path()
+        import tests
+        loader = tests.Loader()
+        loader.loadTestsFromNames(['tests_py3_only'])
+        runner = tests.Runner()
+        result = runner.run(loader.suite)
+        if not result.wasSuccessful():
+            sys.exit('Test failure')
+
+    def _add_eggs_to_path(self):
+        self.distribution.fetch_build_eggs(self.distribution.install_requires)
+        self.distribution.fetch_build_eggs(self.distribution.tests_require)
+
+
 class TestAio(setuptools.Command):
     """Command to run aio tests without fetching or building anything."""
 
@@ -120,8 +151,6 @@ class TestAio(setuptools.Command):
 
     def run(self):
         self._add_eggs_to_path()
-        from grpc.experimental.aio import init_grpc_aio
-        init_grpc_aio()
 
         import tests
         loader = tests.Loader()
@@ -162,6 +191,7 @@ class TestGevent(setuptools.Command):
         'unit._server_ssl_cert_config_test',
         # TODO(https://github.com/grpc/grpc/issues/14901) enable this test
         'protoc_plugin._python_plugin_test.PythonPluginTest',
+        'protoc_plugin._python_plugin_test.SimpleStubsPluginTest',
         # Beta API is unsupported for gevent
         'protoc_plugin.beta_python_plugin_test',
         'unit.beta._beta_features_test',

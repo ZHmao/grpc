@@ -1076,6 +1076,14 @@ class Channel(six.with_metaclass(abc.ABCMeta)):
         """
         raise NotImplementedError()
 
+    def __enter__(self):
+        """Enters the runtime context related to the channel object."""
+        raise NotImplementedError()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Exits the runtime context related to the channel object."""
+        raise NotImplementedError()
+
 
 ##########################  Service-Side Context  ##############################
 
@@ -1879,6 +1887,11 @@ def secure_channel(target, credentials, options=None, compression=None):
       A Channel.
     """
     from grpc import _channel  # pylint: disable=cyclic-import
+    from grpc.experimental import _insecure_channel_credentials
+    if credentials._credentials is _insecure_channel_credentials:
+        raise ValueError(
+            "secure_channel cannot be called with insecure credentials." +
+            " Call insecure_channel instead.")
     return _channel.Channel(target, () if options is None else options,
                             credentials._credentials, compression)
 
